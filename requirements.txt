@@ -1,0 +1,60 @@
+# Core Dependencies
+numpy>=1.24.0
+scipy>=1.10.0
+python-dotenv>=1.0.0
+httpx>=0.24.0
+
+# Audio Processing
+pyaudio>=0.2.13
+sounddevice>=0.4.6
+soundfile>=0.12.1
+librosa>=0.10.0
+webrtcvad>=2.0.10
+
+# Speech Recognition and Transcription
+faster-whisper>=0.9.0
+RealtimeSTT>=0.1.19
+silero-vad>=4.0.0
+
+# Speaker Diarization
+pyannote.audio>=3.1.0
+speechbrain>=0.5.15
+resemblyzer>=0.1.1.dev0
+
+# Wake Word Detection
+openwakeword>=0.5.1
+pvporcupine>=2.2.0
+
+# LLM and RAG
+openai>=1.6.0
+google-generativeai>=0.3.0
+langchain>=0.1.0
+langchain-community>=0.0.10
+chromadb>=0.4.18
+sentence-transformers>=2.2.2
+faiss-cpu>=1.7.4
+
+# TTS
+cartesia>=0.1.0
+pyttsx3>=2.90
+
+# Meeting Integration
+selenium>=4.15.0
+playwright>=1.40.0
+pyautogui>=0.9.54
+
+# Utilities
+psutil>=5.9.0
+colorlog>=6.8.0
+tqdm>=4.66.0
+pydantic>=2.5.0
+pyyaml>=6.0.1
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Optional GPU Support
+# torch>=2.1.0  # Uncomment for GPU support
+# torchaudio>=2.1.0  # Uncomment for GPU support
