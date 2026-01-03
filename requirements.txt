@@ -5,21 +5,22 @@ python-dotenv>=1.0.0
 httpx>=0.24.0
 
 # Audio Processing
-pyaudio>=0.2.13
+# Note: pyaudio removed - sounddevice is a better cross-platform alternative
 sounddevice>=0.4.6
 soundfile>=0.12.1
 librosa>=0.10.0
-webrtcvad>=2.0.10
+# webrtcvad requires compilation - using silero-vad instead
 
 # Speech Recognition and Transcription
-faster-whisper>=0.9.0
-RealtimeSTT>=0.1.19
+faster-whisper>=1.0.0,<1.3.0
+# RealtimeSTT removed - causes dependency conflicts, using faster-whisper directly
 silero-vad>=4.0.0
 
 # Speaker Diarization
 pyannote.audio>=3.1.0
-speechbrain>=0.5.15
-resemblyzer>=0.1.1.dev0
+# speechbrain removed - ruamel.yaml.clibz requires C++ compiler
+# resemblyzer removed - webrtcvad requires C++ compiler
+# Using pyannote.audio which provides speaker embedding capabilities
 
 # Wake Word Detection
 openwakeword>=0.5.1

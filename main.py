@@ -6,11 +6,11 @@ import logging
 from pathlib import Path
 
 # Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from config import load_config, AppConfig
 from src.utils import setup_logging, MemoryMonitor, PerformanceTracker
-from src.orchestrator import MeetingOrchestrator
+from orchestrator import MeetingOrchestrator
 
 logger = logging.getLogger(__name__)
 

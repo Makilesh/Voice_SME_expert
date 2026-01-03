@@ -67,4 +67,4 @@ htmlcov/
 *.temp
 
 
-test/
+tests/
