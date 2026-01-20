@@ -116,8 +116,11 @@ class LLMConfig:
     provider_chain: List[LLMProviderConfig]
     max_retries: int = 3
     retry_delay: float = 1.0
+    max_retry_delay: float = 10.0  # Maximum delay for exponential backoff
     enable_streaming: bool = True
     enable_fallback: bool = True
+    request_timeout: float = 12.0  # Request timeout in seconds
+    connect_timeout: float = 5.0  # Connection timeout
     
     def __post_init__(self):
         """Validate LLM configuration."""
