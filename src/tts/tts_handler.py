@@ -1,5 +1,7 @@
-"""Main TTS handler coordinating synthesis and playback."""
+"""Main TTS handler coordinating synthesis and playback with barge-in support."""
 import logging
+import threading
+import time
 from typing import Optional, Callable, AsyncGenerator
 import asyncio
 import numpy as np
@@ -13,15 +15,21 @@ logger = logging.getLogger(__name__)
 class TTSHandler:
     """
     Main TTS handler coordinating synthesis and playback.
+    Enhanced with barge-in detection from voice_engine_MVP.
     """
     
     def __init__(
         self,
         cartesia_api_key: str = "",
-        cartesia_voice_id: str = "default",
-        cartesia_model: str = "sonic-english",
-        sample_rate: int = 24000,
-        output_device_id: Optional[int] = None
+        cartesia_voice_id: str = "e07c00bc-4134-4eae-9ea4-1a55fb45746b",  # Brooke voice
+        cartesia_model: str = "sonic-3",  # Upgraded to sonic-3
+        sample_rate: int = 22050,  # Cartesia optimal sample rate
+        output_device_id: Optional[int] = None,
+        stt_handler=None,  # Reference to STT for barge-in detection
+        barge_in_enabled: bool = True,
+        barge_in_startup_buffer: float = 0.15,
+        barge_in_check_interval: float = 0.02,
+        barge_in_min_chars: int = 2
     ):
         """
         Initializes TTS handler.
@@ -32,8 +40,26 @@ class TTSHandler:
             cartesia_model: TTS model
             sample_rate: Audio sample rate
             output_device_id: Output device
+            stt_handler: STT handler for barge-in detection
+            barge_in_enabled: Enable barge-in detection
+            barge_in_startup_buffer: Ignore input for first N seconds
+            barge_in_check_interval: How often to check for barge-in
+            barge_in_min_chars: Minimum chars to trigger barge-in
         """
         self.sample_rate = sample_rate
+        
+        # Barge-in configuration (from voice_engine_MVP)
+        self._stt_handler = stt_handler
+        self._barge_in_enabled = barge_in_enabled
+        self._barge_in_startup_buffer = barge_in_startup_buffer
+        self._barge_in_check_interval = barge_in_check_interval
+        self._barge_in_min_chars = barge_in_min_chars
+        self._barge_in_detected = False
+        self._last_seen_realtime_text = ""
+        
+        # Thread-safe state management
+        self._state_lock = threading.Lock()
+        self._stop_event = threading.Event()
         
         # Initialize Cartesia engine
         self._cartesia = None
@@ -54,6 +80,7 @@ class TTSHandler:
         # State
         self._is_speaking = False
         self._current_text: Optional[str] = None
+        self._playback_start_time: float = 0.0
         
         # Callbacks
         self._on_start: Optional[Callable] = None
@@ -62,21 +89,26 @@ class TTSHandler:
         # Fallback TTS
         self._use_fallback = not cartesia_api_key
         
-        logger.info("TTSHandler initialized")
+        logger.info(f"TTSHandler initialized (barge-in: {'enabled' if barge_in_enabled else 'disabled'})")
     
     async def speak(self, text: str, blocking: bool = False) -> None:
         """
-        Synthesizes and plays text.
+        Synthesizes and plays text with optional barge-in detection.
         
         Parameters:
             text: Text to speak
             blocking: Whether to block until complete
+            enable_barge_in: Whether to enable barge-in detection
         """
         if not text.strip():
             return
         
-        self._is_speaking = True
-        self._current_text = text
+        with self._state_lock:
+            self._is_speaking = True
+            self._current_text = text
+            self._barge_in_detected = False
+            self._stop_event.clear()
+            self._playback_start_time = time.time()
         
         if self._on_start:
             self._on_start(text)
@@ -101,11 +133,97 @@ class TTSHandler:
             logger.error(f"TTS error: {e}")
             raise
         finally:
-            self._is_speaking = False
-            self._current_text = None
+            with self._state_lock:
+                self._is_speaking = False
+                self._current_text = None
             
             if self._on_complete:
                 self._on_complete()
+    
+    def _check_barge_in(self) -> bool:
+        """
+        Check for barge-in using STT real-time text (from voice_engine_MVP).
+        Returns True if user is speaking during TTS playback.
+        """
+        if not self._barge_in_enabled or not self._stt_handler:
+            return False
+        
+        # Skip check during startup buffer
+        elapsed = time.time() - self._playback_start_time
+        if elapsed < self._barge_in_startup_buffer:
+            return False
+        
+        try:
+            # Get current real-time text from STT
+            current_text = ""
+            if hasattr(self._stt_handler, 'get_realtime_text'):
+                current_text = self._stt_handler.get_realtime_text()
+            elif hasattr(self._stt_handler, 'realtime_text'):
+                current_text = self._stt_handler.realtime_text
+            
+            if not current_text:
+                self._last_seen_realtime_text = ""
+                return False
+            
+            # Check if new text appeared
+            if current_text != self._last_seen_realtime_text:
+                new_chars = len(current_text) - len(self._last_seen_realtime_text)
+                if new_chars >= self._barge_in_min_chars:
+                    logger.info(f"🎤 Barge-in detected: '{current_text[:30]}...'")
+                    self._barge_in_detected = True
+                    self._last_seen_realtime_text = current_text
+                    return True
+                self._last_seen_realtime_text = current_text
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Barge-in check error: {e}")
+            return False
+    
+    def wait_for_completion(self, timeout: float = 30.0) -> bool:
+        """
+        Wait for TTS playback to complete or barge-in (from voice_engine_MVP).
+        
+        Parameters:
+            timeout: Maximum wait time in seconds
+        
+        Returns:
+            True if completed normally, False if interrupted by barge-in
+        """
+        start_time = time.time()
+        
+        while self._player.is_playing():
+            # Check for barge-in
+            if self._check_barge_in():
+                self.stop_playback()
+                return False
+            
+            # Check for stop event
+            if self._stop_event.is_set():
+                return False
+            
+            # Check timeout
+            if time.time() - start_time > timeout:
+                logger.warning(f"⏱️ TTS playback timeout after {timeout}s")
+                self.stop_playback()
+                return False
+            
+            time.sleep(self._barge_in_check_interval)
+        
+        return True
+    
+    def stop_playback(self) -> None:
+        """Immediately stop audio playback."""
+        self._stop_event.set()
+        self._player.stop()
+        with self._state_lock:
+            self._is_speaking = False
+        logger.debug("🛑 Playback stopped")
+    
+    def was_barge_in(self) -> bool:
+        """Check if last playback was interrupted by barge-in."""
+        return self._barge_in_detected
     
     async def speak_streaming(
         self,

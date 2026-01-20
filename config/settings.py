@@ -25,8 +25,16 @@ class AppConfig:
     
     # Cartesia TTS Configuration
     cartesia_api_key: str = ""
-    cartesia_voice_id: str = "default"
-    cartesia_model: str = "sonic-english"
+    cartesia_voice_id: str = "e07c00bc-4134-4eae-9ea4-1a55fb45746b"  # Brooke voice
+    cartesia_model: str = "sonic-3"  # Use sonic-3 for best quality
+    cartesia_sample_rate: int = 22050  # Cartesia optimal sample rate
+    
+    # TTS Barge-in Configuration (from voice_engine_MVP)
+    tts_barge_in_enabled: bool = True
+    tts_barge_in_startup_buffer: float = 0.15  # Ignore first 150ms of playback
+    tts_barge_in_check_interval: float = 0.02  # Check every 20ms
+    tts_barge_in_min_chars: int = 2  # Minimum characters to trigger barge-in
+    tts_playback_timeout: float = 30.0  # Maximum playback wait time
     
     # LLM Provider Priority
     llm_provider_chain: List[str] = field(default_factory=lambda: ["openai", "ollama"])
@@ -51,6 +59,10 @@ class AppConfig:
     stt_model: str = "base.en"
     stt_language: str = "en"
     stt_compute_type: str = "float32"
+    stt_mode: str = "accurate"  # Options: fast, balanced, accurate
+    stt_transcription_timeout: float = 30.0  # Maximum time to wait for transcription
+    stt_silero_sensitivity: float = 0.5  # VAD sensitivity
+    stt_webrtc_sensitivity: int = 3  # WebRTC VAD sensitivity (0-3)
     
     # Expert Configuration
     knowledge_base_path: str = "./knowledge/documents"
@@ -66,6 +78,20 @@ class AppConfig:
     # Performance Configuration
     max_latency_ms: int = 500
     enable_gpu: bool = False
+    
+    # Error Recovery Configuration (from voice_engine_MVP)
+    max_consecutive_errors: int = 3
+    retry_base_delay: float = 1.0
+    retry_max_delay: float = 10.0
+    recovery_cooldown: float = 60.0
+    
+    # Memory Management Configuration (from voice_engine_MVP)
+    audio_queue_min_size: int = 50
+    audio_queue_max_size: int = 200
+    audio_queue_default_size: int = 100
+    enable_memory_monitoring: bool = True
+    memory_check_interval: float = 5.0
+    memory_warning_threshold_mb: float = 500.0
     
     # Logging Configuration
     log_level: str = "INFO"
@@ -148,8 +174,16 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         
         # Cartesia TTS
         cartesia_api_key=os.getenv("CARTESIA_API_KEY", ""),
-        cartesia_voice_id=os.getenv("CARTESIA_VOICE_ID", "default"),
-        cartesia_model=os.getenv("CARTESIA_MODEL", "sonic-english"),
+        cartesia_voice_id=os.getenv("CARTESIA_VOICE_ID", "e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
+        cartesia_model=os.getenv("CARTESIA_MODEL", "sonic-3"),
+        cartesia_sample_rate=int(os.getenv("CARTESIA_SAMPLE_RATE", "22050")),
+        
+        # TTS Barge-in
+        tts_barge_in_enabled=os.getenv("TTS_BARGE_IN_ENABLED", "true").lower() == "true",
+        tts_barge_in_startup_buffer=float(os.getenv("TTS_BARGE_IN_STARTUP_BUFFER", "0.15")),
+        tts_barge_in_check_interval=float(os.getenv("TTS_BARGE_IN_CHECK_INTERVAL", "0.02")),
+        tts_barge_in_min_chars=int(os.getenv("TTS_BARGE_IN_MIN_CHARS", "2")),
+        tts_playback_timeout=float(os.getenv("TTS_PLAYBACK_TIMEOUT", "30.0")),
         
         # LLM Provider Chain
         llm_provider_chain=llm_provider_chain,
@@ -174,6 +208,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         stt_model=os.getenv("STT_MODEL", "base.en"),
         stt_language=os.getenv("STT_LANGUAGE", "en"),
         stt_compute_type=os.getenv("STT_COMPUTE_TYPE", "float32"),
+        stt_mode=os.getenv("STT_MODE", "accurate"),
+        stt_transcription_timeout=float(os.getenv("STT_TRANSCRIPTION_TIMEOUT", "30.0")),
+        stt_silero_sensitivity=float(os.getenv("STT_SILERO_SENSITIVITY", "0.5")),
+        stt_webrtc_sensitivity=int(os.getenv("STT_WEBRTC_SENSITIVITY", "3")),
         
         # Expert
         knowledge_base_path=os.getenv("KNOWLEDGE_BASE_PATH", "./knowledge/documents"),
@@ -189,6 +227,20 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         # Performance
         max_latency_ms=int(os.getenv("MAX_LATENCY_MS", "500")),
         enable_gpu=os.getenv("ENABLE_GPU", "false").lower() == "true",
+        
+        # Error Recovery
+        max_consecutive_errors=int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3")),
+        retry_base_delay=float(os.getenv("RETRY_BASE_DELAY", "1.0")),
+        retry_max_delay=float(os.getenv("RETRY_MAX_DELAY", "10.0")),
+        recovery_cooldown=float(os.getenv("RECOVERY_COOLDOWN", "60.0")),
+        
+        # Memory Management
+        audio_queue_min_size=int(os.getenv("AUDIO_QUEUE_MIN_SIZE", "50")),
+        audio_queue_max_size=int(os.getenv("AUDIO_QUEUE_MAX_SIZE", "200")),
+        audio_queue_default_size=int(os.getenv("AUDIO_QUEUE_DEFAULT_SIZE", "100")),
+        enable_memory_monitoring=os.getenv("ENABLE_MEMORY_MONITORING", "true").lower() == "true",
+        memory_check_interval=float(os.getenv("MEMORY_CHECK_INTERVAL", "5.0")),
+        memory_warning_threshold_mb=float(os.getenv("MEMORY_WARNING_THRESHOLD_MB", "500.0")),
         
         # Logging
         log_level=os.getenv("LOG_LEVEL", "INFO"),

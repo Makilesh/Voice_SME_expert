@@ -1,5 +1,7 @@
 """Main STT handler coordinating transcription with speaker info."""
 import logging
+import re
+import threading
 import numpy as np
 from typing import Dict, List, Optional, AsyncGenerator, Callable
 import asyncio
@@ -14,14 +16,30 @@ logger = logging.getLogger(__name__)
 class STTHandler:
     """
     Main STT handler coordinating transcription with speaker info.
+    Enhanced with text corrections and real-time support from voice_engine_MVP.
     """
+    
+    # Pre-compiled regex patterns for text corrections (from voice_engine_MVP)
+    CORRECTIONS = {
+        re.compile(r'\b(Shambla Tech|Shambla|Shamlataq|Shamlaq|Shamlata|Samba|Sharma Tech)\b', re.IGNORECASE): 'Shamla Tech',
+        re.compile(r'\b(eye services?|I services?|A I services?)\b', re.IGNORECASE): 'AI services',
+        re.compile(r'\b(A P I|ay pee eye|a p eye)\b', re.IGNORECASE): 'API',
+        re.compile(r'\b(block ?chain)\b', re.IGNORECASE): 'blockchain',
+        re.compile(r'\b(crypto ?currency|cripto)\b', re.IGNORECASE): 'cryptocurrency',
+        re.compile(r'\bwanna\b', re.IGNORECASE): 'want to',
+        re.compile(r'\bgonna\b', re.IGNORECASE): 'going to',
+        re.compile(r'\bgotta\b', re.IGNORECASE): 'got to',
+        re.compile(r'\blemme\b', re.IGNORECASE): 'let me',
+    }
     
     def __init__(
         self,
         model: str = "base.en",
         language: str = "en",
         compute_type: str = "float32",
-        sample_rate: int = 16000
+        sample_rate: int = 16000,
+        mode: str = "accurate",
+        transcription_timeout: float = 30.0
     ):
         """
         Initializes STT with specified model.
@@ -31,12 +49,19 @@ class STTHandler:
             language: Language code
             compute_type: Compute precision
             sample_rate: Audio sample rate
+            mode: STT mode (fast, balanced, accurate)
+            transcription_timeout: Maximum transcription wait time
         """
         self.sample_rate = sample_rate
+        self.mode = mode
+        self.transcription_timeout = transcription_timeout
+        
+        # Select model based on mode (from voice_engine_MVP)
+        self.model_name = self._select_model(mode, model)
         
         # Initialize transcriber
         self.transcriber = StreamingTranscriber(
-            model=model,
+            model=self.model_name,
             language=language,
             compute_type=compute_type
         )
@@ -49,7 +74,61 @@ class STTHandler:
         self._segment_start_time: float = 0.0
         self._is_streaming = False
         
-        logger.info(f"STTHandler initialized: model={model}")
+        # Real-time transcription state (from voice_engine_MVP)
+        self.realtime_text = ""
+        self._realtime_lock = threading.Lock()
+        
+        # TTS stop callback for barge-in
+        self.tts_stop_callback: Optional[Callable] = None
+        
+        # Performance tracking
+        self._transcription_count = 0
+        self._avg_latency = 0.0
+        
+        logger.info(f"🎤 STTHandler initialized: model={self.model_name}, mode={mode}")
+    
+    def _select_model(self, mode: str, default_model: str) -> str:
+        """Select model based on mode (from voice_engine_MVP)."""
+        models = {
+            "fast": "tiny.en",
+            "balanced": "small.en",
+            "accurate": "base.en"
+        }
+        return models.get(mode, default_model)
+    
+    def _apply_corrections(self, text: str) -> str:
+        """Apply text corrections using pre-compiled patterns (from voice_engine_MVP)."""
+        if not text:
+            return text
+        
+        original = text
+        for pattern, replacement in self.CORRECTIONS.items():
+            text = pattern.sub(replacement, text)
+        
+        if original != text:
+            logger.debug(f"🔧 Corrected: '{original}' → '{text}'")
+        
+        return text.strip()
+    
+    def get_realtime_text(self) -> str:
+        """Get current real-time transcription (thread-safe)."""
+        with self._realtime_lock:
+            return self.realtime_text
+    
+    def clear_realtime_text(self) -> None:
+        """Clear real-time transcription buffer."""
+        with self._realtime_lock:
+            self.realtime_text = ""
+    
+    def get_performance_stats(self) -> Dict:
+        """Get performance statistics (from voice_engine_MVP)."""
+        return {
+            "model": self.model_name,
+            "mode": self.mode,
+            "transcription_count": self._transcription_count,
+            "avg_latency_ms": round(self._avg_latency, 1),
+            "is_streaming": self._is_streaming
+        }
     
     def transcribe_segment(
         self,
@@ -60,6 +139,7 @@ class STTHandler:
     ) -> Dict:
         """
         Transcribes audio segment with speaker attribution.
+        Enhanced with text corrections from voice_engine_MVP.
         
         Parameters:
             audio_segment: Audio data
@@ -80,7 +160,19 @@ class STTHandler:
         self.transcriber.feed_audio(audio_segment)
         text = self.transcriber.get_final_transcript()
         
+        # Apply text corrections (from voice_engine_MVP)
+        text = self._apply_corrections(text)
+        
         processing_time = (time.perf_counter() - start_time) * 1000
+        
+        # Update performance stats
+        self._transcription_count += 1
+        self._avg_latency = ((self._avg_latency * (self._transcription_count - 1)) + processing_time) / self._transcription_count
+        
+        # Update real-time text
+        if text:
+            with self._realtime_lock:
+                self.realtime_text = text
         
         # Calculate confidence (simplified)
         confidence = 0.95 if text else 0.0

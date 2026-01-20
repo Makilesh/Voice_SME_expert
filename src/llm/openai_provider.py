@@ -1,4 +1,4 @@
-"""OpenAI API provider implementation."""
+"""OpenAI API provider implementation with optimizations from voice_engine_MVP."""
 import logging
 from typing import List, Dict, Optional, AsyncGenerator
 import asyncio
@@ -9,14 +9,16 @@ logger = logging.getLogger(__name__)
 class OpenAIProvider:
     """
     OpenAI API provider implementation.
+    Enhanced with optimizations from voice_engine_MVP.
     """
     
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-4-turbo-preview",
+        model: str = "gpt-4o-mini",  # Updated to faster model
         base_url: Optional[str] = None,
-        timeout: int = 30
+        timeout: int = 30,
+        connect_timeout: int = 5
     ):
         """
         Initializes OpenAI provider.
@@ -26,11 +28,13 @@ class OpenAIProvider:
             model: Model name to use
             base_url: Optional custom base URL
             timeout: Request timeout in seconds
+            connect_timeout: Connection timeout in seconds
         """
         self.api_key = api_key
         self.model = model
         self.base_url = base_url or "https://api.openai.com/v1"
         self.timeout = timeout
+        self.connect_timeout = connect_timeout
         
         self._client = None
         self._async_client = None
@@ -70,16 +74,23 @@ class OpenAIProvider:
     async def generate(
         self,
         messages: List[Dict],
-        max_tokens: int = 1000,
-        temperature: float = 0.7
+        max_tokens: int = 120,  # Reduced for faster voice responses
+        temperature: float = 0.75,  # Optimized for natural conversation
+        top_p: float = 0.9,
+        frequency_penalty: float = 0.3,
+        presence_penalty: float = 0.2
     ) -> str:
         """
         Generates response using OpenAI API.
+        Enhanced with voice-optimized parameters from voice_engine_MVP.
         
         Parameters:
             messages: List of message dicts
             max_tokens: Maximum tokens in response
             temperature: Sampling temperature
+            top_p: Nucleus sampling parameter
+            frequency_penalty: Penalty for token frequency
+            presence_penalty: Penalty for token presence
         
         Returns:
             string: Generated response
@@ -91,7 +102,10 @@ class OpenAIProvider:
                 model=self.model,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=temperature
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty
             )
             
             return response.choices[0].message.content or ""
