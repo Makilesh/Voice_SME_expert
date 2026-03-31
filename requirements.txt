@@ -8,9 +8,14 @@ httpx>=0.24.0
 sounddevice>=0.4.6
 soundfile>=0.12.1
 librosa>=0.10.0
+pyaudio>=0.2.13
 
 # Speech Recognition and Transcription
 faster-whisper>=1.0.0,<1.3.0
+
+# RealtimeSTT/TTS (from voice_engine_MVP)
+RealtimeSTT>=0.1.16
+RealtimeTTS[kokoro]
 
 # Speaker Diarization
 # speechbrain is used by SpeakerEmbeddingExtractor for ECAPA-TDNN embeddings.

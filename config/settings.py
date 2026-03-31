@@ -19,9 +19,14 @@ class AppConfig:
     gemini_api_key: str = ""
     gemini_model: str = "gemini-pro"
     
+    # Groq Configuration (from voice_engine_MVP)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.1-8b-instant"
+    
     # Ollama Configuration
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama2"
+    ollama_enabled: bool = False
     
     # Cartesia TTS Configuration
     use_cartesia_tts: bool = True  # Enable/disable Cartesia TTS
@@ -87,6 +92,7 @@ class AppConfig:
     recovery_cooldown: float = 60.0
     
     # Memory Management Configuration (from voice_engine_MVP)
+    memory_latency_mode: str = "balanced"  # Options: low_latency, balanced, stable
     audio_queue_min_size: int = 50
     audio_queue_max_size: int = 200
     audio_queue_default_size: int = 100
@@ -169,9 +175,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-pro"),
         
+        # Groq (from voice_engine_MVP)
+        groq_api_key=os.getenv("GROQ_API_KEY", ""),
+        groq_model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+        
         # Ollama
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama2"),
+        ollama_enabled=os.getenv("OLLAMA_ENABLED", "false").lower() == "true",
         
         # Cartesia TTS
         use_cartesia_tts=os.getenv("USE_CARTESIA_TTS", "true").lower() == "true",
@@ -237,6 +248,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         recovery_cooldown=float(os.getenv("RECOVERY_COOLDOWN", "60.0")),
         
         # Memory Management
+        memory_latency_mode=os.getenv("MEMORY_LATENCY_MODE", "balanced"),
         audio_queue_min_size=int(os.getenv("AUDIO_QUEUE_MIN_SIZE", "50")),
         audio_queue_max_size=int(os.getenv("AUDIO_QUEUE_MAX_SIZE", "200")),
         audio_queue_default_size=int(os.getenv("AUDIO_QUEUE_DEFAULT_SIZE", "100")),

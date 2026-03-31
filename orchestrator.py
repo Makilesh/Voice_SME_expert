@@ -7,7 +7,7 @@ import time
 import threading
 import numpy as np
 
-from config import AppConfig
+from config import AppConfig, load_config
 from src.audio import (
     MicrophoneCapture,
     VirtualAudioCapture,
@@ -16,10 +16,13 @@ from src.audio import (
 )
 from src.diarization import SpeakerDiarizer
 from src.transcription import STTHandler
+from src.transcription.stt_handler_realtime import RealtimeSTTHandler
 from src.wake_word import WakeWordDetector
 from src.expert import ExpertAgent, KnowledgeBase, ContextManager, PromptBuilder, RAGRetriever
 from src.llm import LLMHandler
+from src.llm.llm_handler_realtime import MeetingLLMHandler
 from src.tts import TTSHandler
+from src.tts.tts_handler_realtime import MeetingTTSHandler
 from src.meeting import ZoomConnector, MeetConnector, TeamsConnector
 from src.utils import MemoryMonitor, PerformanceTracker, ThreadManager
 
@@ -47,7 +50,7 @@ class MeetingOrchestrator:
     
     def __init__(self, config: AppConfig):
         """
-        Initializes all components.
+        Initializes all components with MVP voice pipeline.
         
         Parameters:
             config: Application configuration
@@ -62,7 +65,7 @@ class MeetingOrchestrator:
         self.performance_tracker = PerformanceTracker()
         self.thread_manager = ThreadManager()
         
-        # Initialize audio components
+        # Initialize audio components (working — keep as-is)
         self.audio_capture: Optional[MicrophoneCapture] = None
         self.audio_preprocessor = AudioPreprocessor(
             sample_rate=config.sample_rate,
@@ -73,25 +76,33 @@ class MeetingOrchestrator:
             sample_rate=config.sample_rate
         )
         
-        # --- Initialize Speaker Diarization ---
-        self.speaker_diarizer = SpeakerDiarizer(
-            embedding_model=config.speaker_embedding_model,
-            similarity_threshold=config.speaker_similarity_threshold,
-            max_speakers=config.max_speakers,
-            sample_rate=config.sample_rate,
+        # --- Voice Pipeline (MVP-backed) ---
+        # STT: RealtimeSTT with continuous listening and barge-in
+        self.stt_handler = RealtimeSTTHandler(
+            mode=config.stt_mode,
+            sample_rate=config.sample_rate
         )
         
-        # --- Initialize STT ---
-        self.stt_handler = STTHandler(
-            model=config.stt_model,
-            language=config.stt_language,
-            compute_type=config.stt_compute_type,
-            sample_rate=config.sample_rate,
-            mode=getattr(config, 'stt_mode', 'accurate'),
-            transcription_timeout=getattr(config, 'stt_transcription_timeout', 30.0),
-        )
+        # TTS: Initialized after STT starts (needs STT for barge-in)
+        self.tts_handler: Optional[MeetingTTSHandler] = None
         
-        # --- Initialize Wake Word Detector ---
+        # LLM: Initialized after STT/TTS
+        self.llm_handler: Optional[MeetingLLMHandler] = None
+        
+        # --- Speaker Diarization (graceful fallback) ---
+        try:
+            self.speaker_diarizer = SpeakerDiarizer(
+                embedding_model=config.speaker_embedding_model,
+                similarity_threshold=config.speaker_similarity_threshold,
+                max_speakers=config.max_speakers,
+                sample_rate=config.sample_rate,
+            )
+            logger.info("✅ Speaker diarization initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Speaker diarization unavailable: {e}. Using fallback.")
+            self.speaker_diarizer = None
+        
+        # --- Wake Word Detector ---
         self.wake_word_detector = WakeWordDetector(
             wake_phrases=config.wake_phrases,
             sensitivity=config.wake_word_sensitivity,
@@ -99,21 +110,7 @@ class MeetingOrchestrator:
             sample_rate=config.sample_rate,
         )
         
-        # --- Initialize LLM Handler ---
-        self.llm_handler = LLMHandler(
-            openai_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            gemini_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            ollama_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            provider_priority=config.llm_provider_chain,
-            max_retries=getattr(config, 'max_consecutive_errors', 3),
-            retry_base_delay=getattr(config, 'retry_base_delay', 1.0),
-            retry_max_delay=getattr(config, 'retry_max_delay', 10.0),
-        )
-        
-        # --- Initialize Expert Agent (Knowledge + RAG + LLM) ---
+        # --- Expert Agent (Knowledge + RAG) ---
         self.knowledge_base = KnowledgeBase(
             persist_directory=config.embeddings_path,
         )
@@ -125,26 +122,9 @@ class MeetingOrchestrator:
             max_context_length=config.max_context_tokens,
         )
         self.prompt_builder = PromptBuilder()
-        self.expert_agent = ExpertAgent(
-            knowledge_base=self.knowledge_base,
-            llm_handler=self.llm_handler,
-            rag_retriever=self.rag_retriever,
-            context_manager=self.context_manager,
-            prompt_builder=self.prompt_builder,
-        )
         
-        # --- Initialize TTS Handler (with barge-in wired to STT) ---
-        self.tts_handler = TTSHandler(
-            cartesia_api_key=config.cartesia_api_key,
-            cartesia_voice_id=config.cartesia_voice_id,
-            cartesia_model=config.cartesia_model,
-            sample_rate=config.cartesia_sample_rate,
-            stt_handler=self.stt_handler,
-            barge_in_enabled=config.tts_barge_in_enabled,
-            barge_in_startup_buffer=config.tts_barge_in_startup_buffer,
-            barge_in_check_interval=config.tts_barge_in_check_interval,
-            barge_in_min_chars=config.tts_barge_in_min_chars,
-        )
+        # Expert agent initialized after LLM handler is ready
+        self.expert_agent: Optional[ExpertAgent] = None
         
         # Meeting connector (lazily initialized based on mode)
         self.meeting_connector = None
@@ -161,11 +141,11 @@ class MeetingOrchestrator:
         self._turn_stats: list = []
         self._consecutive_errors = 0
         
-        logger.info("MeetingOrchestrator initialized with full-duplex support")
+        logger.info("✅ MeetingOrchestrator initialized with MVP voice pipeline")
     
     async def start(self, audio_source: str) -> None:
         """
-        Starts the orchestrator.
+        Starts the orchestrator with MVP voice pipeline.
         
         Parameters:
             audio_source: Audio source specification (e.g., "microphone:default")
@@ -178,11 +158,35 @@ class MeetingOrchestrator:
         self._start_time = datetime.now()
         
         try:
-            # Parse audio source
+            # 1. Start continuous STT (must be first — TTS needs it for barge-in)
+            await self.stt_handler.start()
+            logger.info("✅ STT: Continuous listening active")
+            
+            # 2. Initialize TTS now that STT is ready
+            self.tts_handler = MeetingTTSHandler(self.stt_handler, self.config)
+            logger.info("✅ TTS: Cartesia engine ready")
+            
+            # 3. Initialize LLM handler
+            self.llm_handler = MeetingLLMHandler(self.config)
+            logger.info("✅ LLM: Multi-provider handler ready")
+            
+            # 4. Wire barge-in: TTS stop → STT callback
+            self.stt_handler.set_tts_stop_callback(self.tts_handler.stop_playback)
+            
+            # 5. Initialize Expert Agent now that LLM is ready
+            self.expert_agent = ExpertAgent(
+                knowledge_base=self.knowledge_base,
+                llm_handler=self.llm_handler,
+                rag_retriever=self.rag_retriever,
+                context_manager=self.context_manager,
+                prompt_builder=self.prompt_builder,
+            )
+            logger.info("✅ ExpertAgent: RAG + context manager ready")
+            
+            # 6. Set up audio capture based on source
             source_type, *source_args = audio_source.split(":")
             source_detail = source_args[0] if source_args else None
             
-            # Initialize audio capture based on source
             if source_type == "microphone":
                 device_idx = None
                 if source_detail and source_detail != "default":
@@ -258,21 +262,27 @@ class MeetingOrchestrator:
             else:
                 raise ValueError(f"Unsupported audio source type: {source_type}")
             
-            # Start audio processing
+            # 7. Start background tasks
             self._is_running = True
             
-            # Start the main audio processing pipeline as a background task
+            # Start the main audio processing pipeline
             self.thread_manager.start_background_task(
                 self.process_audio_stream,
                 "audio_processing"
             )
             
-            logger.info("=== System Ready ===")
+            # Start the query listener for continuous transcription
+            self.thread_manager.start_background_task(
+                self._listen_for_queries,
+                "query_listener"
+            )
+            
+            logger.info("=== SME System Ready ===")
             logger.info(f"Wake phrases: {', '.join(self.config.wake_phrases)}")
             logger.info(f"Mode: {source_type}")
-            logger.info(f"LLM chain: {' -> '.join(self.config.llm_provider_chain)}")
-            logger.info(f"TTS: {'Cartesia' if self.config.cartesia_api_key else 'Fallback(pyttsx3)'}")
-            logger.info("==================")
+            logger.info(f"LLM: Multi-provider (MVP)")
+            logger.info(f"TTS: {'Cartesia' if self.config.cartesia_api_key else 'Fallback'}")
+            logger.info("========================")
         
         except Exception as e:
             logger.error(f"Failed to start orchestrator: {e}")
@@ -292,16 +302,19 @@ class MeetingOrchestrator:
         
         try:
             # 1. Stop TTS playback first (immediate silence)
-            try:
-                self.tts_handler.stop_playback()
-            except Exception as e:
-                logger.warning(f"TTS shutdown error: {e}")
+            if self.tts_handler:
+                try:
+                    self.tts_handler.stop_playback()
+                    self.tts_handler.shutdown()
+                except Exception as e:
+                    logger.warning(f"TTS shutdown error: {e}")
             
             # 2. Stop STT streaming
-            try:
-                self.stt_handler.stop_streaming()
-            except Exception as e:
-                logger.warning(f"STT shutdown error: {e}")
+            if self.stt_handler:
+                try:
+                    await self.stt_handler.stop()
+                except Exception as e:
+                    logger.warning(f"STT shutdown error: {e}")
             
             # 3. Stop wake word detection
             try:
@@ -310,10 +323,11 @@ class MeetingOrchestrator:
                 logger.warning(f"Wake word shutdown error: {e}")
             
             # 4. Shutdown LLM handler (close async clients)
-            try:
-                await self.llm_handler.shutdown()
-            except Exception as e:
-                logger.warning(f"LLM shutdown error: {e}")
+            if self.llm_handler:
+                try:
+                    await self.llm_handler.shutdown()
+                except Exception as e:
+                    logger.warning(f"LLM shutdown error: {e}")
             
             # 5. Leave meeting if connected
             if self.meeting_connector:
@@ -328,17 +342,6 @@ class MeetingOrchestrator:
             
             # 7. Stop all background tasks
             await self.thread_manager.stop_all(timeout=5.0)
-            
-            # 8. Export transcript if configured
-            if self.config.save_transcripts:
-                try:
-                    self.stt_handler.export_transcript(
-                        format="json",
-                        output_path=self.config.transcript_output_dir
-                    )
-                    logger.info(f"Transcript saved to {self.config.transcript_output_dir}")
-                except Exception as e:
-                    logger.warning(f"Transcript export error: {e}")
             
             # Print final stats
             self._print_session_summary()
@@ -455,6 +458,73 @@ class MeetingOrchestrator:
         finally:
             logger.info("Audio processing loop stopped")
     
+    async def _listen_for_queries(self) -> None:
+        """
+        Main expert query loop using MVP STT.
+        Uses the MVP STT handler's blocking get_transcription() to get each
+        complete utterance, then checks if it's a wake-word-triggered query.
+        Runs concurrently with process_audio_stream via thread_manager.
+        """
+        logger.info("🎧 Query listener started")
+        
+        # Build wake phrase set for fast lookup
+        wake_set = {p.lower() for p in self.config.wake_phrases}
+        
+        while self._is_running:
+            try:
+                # Block until user finishes speaking
+                text = await self.stt_handler.get_transcription(
+                    timeout=self.config.stt_transcription_timeout
+                )
+                if not text:
+                    continue
+                
+                text_lower = text.lower()
+                logger.info(f"[Transcript] {text}")
+                
+                # Add to expert context regardless of wake word
+                if self.expert_agent:
+                    self.expert_agent.add_transcript("Speaker", text)
+                
+                # Perform diarization on the audio buffer snapshot
+                speaker_id = "Speaker-1"
+                if self.speaker_diarizer:
+                    try:
+                        audio_snap = self.audio_buffer.get_latest(1.5)
+                        if len(audio_snap) > 0:
+                            segments = self.speaker_diarizer.process_audio(
+                                audio_snap, time.time()
+                            )
+                            if segments:
+                                speaker_id = segments[-1].get("speaker_id", "Speaker-1")
+                    except Exception as e:
+                        logger.debug(f"Diarization error: {e}")
+                
+                # Wake word check
+                triggered = any(phrase in text_lower for phrase in wake_set)
+                if triggered:
+                    self._wake_word_detections += 1
+                    
+                    # Strip wake phrase from query
+                    query = text
+                    for phrase in self.config.wake_phrases:
+                        query = query.lower().replace(phrase.lower(), "").strip()
+                    
+                    if not query:
+                        query = text  # fallback: use full text
+                    
+                    logger.info(f"🎤 Wake word detected! Query: {query}")
+                    await self.handle_expert_query(query, speaker_id)
+            
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Query listener error: {e}")
+                self._consecutive_errors += 1
+                await asyncio.sleep(0.5)
+        
+        logger.info("🎧 Query listener stopped")
+    
     async def handle_wake_word_detected(self, audio_after_wake: bytes) -> None:
         """
         Handles wake word detection event.
@@ -526,6 +596,7 @@ class MeetingOrchestrator:
     ) -> None:
         """
         Processes expert query and speaks response with full-duplex support.
+        Uses MVP handlers for STT/LLM/TTS with barge-in detection.
         
         Parameters:
             query: User query text
@@ -535,18 +606,35 @@ class MeetingOrchestrator:
         turn = _turn or TurnStats()
         turn_start = time.time()
         
-        speaker_name = self.speaker_diarizer.get_speaker_name(speaker_id) or speaker_id
+        # Get speaker name from diarizer (with fallback)
+        speaker_name = speaker_id
+        if self.speaker_diarizer:
+            try:
+                speaker_name = self.speaker_diarizer.get_speaker_name(speaker_id) or speaker_id
+            except Exception:
+                pass
+        
         logger.info(f"[Expert] Query from {speaker_name}: {query}")
         self._expert_queries += 1
         
         try:
-            # Step 1: Get LLM response via Expert Agent (includes RAG)
+            if not self.expert_agent or not self.tts_handler or not self.llm_handler:
+                logger.error("Expert components not initialized")
+                return
+            
+            # Step 1: Get RAG + meeting context
             llm_start = time.time()
-            response = await self.expert_agent.process_query(
+            
+            rag_results = self.rag_retriever.retrieve(query, top_k=5)
+            knowledge_ctx = self.rag_retriever.build_context_string(rag_results)
+            meeting_ctx = self.context_manager.get_recent_context(num_entries=10)
+            
+            # Step 2: Generate response via MVP LLM handler (with context injection)
+            response = await self.llm_handler.process_query(
                 query=query,
-                speaker=speaker_name,
-                use_rag=True,
-                use_context=True,
+                speaker_id=speaker_name,
+                knowledge_context=knowledge_ctx,
+                meeting_context=meeting_ctx,
             )
             turn.llm_time = time.time() - llm_start
             
@@ -554,49 +642,48 @@ class MeetingOrchestrator:
                 logger.warning("[Expert] Empty response from LLM")
                 return
             
-            logger.info(f"[Expert] Response ({len(response)} chars): {response[:100]}...")
+            logger.info(f"[Expert] Response: {response}")
             
-            # Step 2: Speak response with barge-in monitoring
+            # Step 3: Speak with barge-in support
             tts_start = time.time()
             
-            # Clear STT real-time buffer before speaking (critical for barge-in)
+            # Tell STT that TTS is playing (for echo suppression)
+            self.stt_handler.set_tts_active(True)
+            
+            # Clear STT real-time buffer before speaking
             self.stt_handler.clear_realtime_text()
             
-            # Synthesise + play
-            await self.tts_handler.speak(response)
+            # Speak (non-blocking)
+            self.tts_handler.speak(response, enable_barge_in=True)
             
-            # Block until playback finishes or barge-in interrupts
+            # Wait for completion or barge-in
             completed = self.tts_handler.wait_for_completion(
                 timeout=self.config.tts_playback_timeout
             )
-            turn.tts_time = time.time() - tts_start
             
-            # Step 3: Handle barge-in if detected
-            if not completed and self.tts_handler.was_barge_in():
-                turn.was_barge_in = True
+            # Tell STT that TTS is done
+            self.stt_handler.set_tts_active(False)
+            
+            turn.tts_time = time.time() - tts_start
+            turn.was_barge_in = not completed
+            
+            if turn.was_barge_in:
                 self._barge_in_count += 1
-                logger.info("Barge-in detected — processing interruption")
-                
-                interruption_text = self.stt_handler.get_realtime_text()
-                if interruption_text and len(interruption_text.strip()) > 2:
-                    logger.info(f"Interruption: {interruption_text}")
-                    # Recursively handle the interruption as a new query
-                    await self.handle_expert_query(interruption_text, speaker_id)
+                logger.info("🎤 Barge-in detected during response")
+            
+            # Add response to context
+            self.context_manager.add_entry(response, "assistant")
             
             turn.total_time = time.time() - turn_start
             self._turn_stats.append(turn)
             
             # Log turn timing
             logger.info(
-                f"Turn timing: STT={turn.stt_time*1000:.0f}ms, "
-                f"LLM={turn.llm_time*1000:.0f}ms, "
-                f"TTS={turn.tts_time*1000:.0f}ms, "
+                f"⏱ Turn: LLM={turn.llm_time*1000:.0f}ms "
+                f"TTS={turn.tts_time*1000:.0f}ms "
                 f"Total={turn.total_time*1000:.0f}ms"
-                f"{' [BARGE-IN]' if turn.was_barge_in else ''}"
+                + (" [BARGE-IN]" if turn.was_barge_in else "")
             )
-            
-            if turn.total_time > 3.0:
-                logger.warning(f"Slow turn: {turn.total_time:.1f}s")
             
             # Reset error counter on success
             self._consecutive_errors = 0
