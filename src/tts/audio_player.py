@@ -103,6 +103,9 @@ class AudioPlayer:
                     sd.wait()  # Wait for playback to finish
                     
                 except queue.Empty:
+                    # Queue is empty, mark as not playing if nothing in queue
+                    if self._audio_queue.empty():
+                        self._is_playing = False
                     continue
                 except Exception as e:
                     logger.error(f"Playback error: {e}")
@@ -152,7 +155,22 @@ class AudioPlayer:
     
     def is_playing(self) -> bool:
         """Check if currently playing."""
-        return self._is_playing and not self._is_paused
+        if self._is_paused:
+            return False
+        
+        # Check queue and thread state
+        has_audio = not self._audio_queue.empty()
+        thread_alive = self._playback_thread and self._playback_thread.is_alive()
+        
+        # Also check if sounddevice is actively playing
+        try:
+            import sounddevice as sd
+            # Check if default output stream is active
+            stream_active = len(sd._last_callback) > 0 if hasattr(sd, '_last_callback') else False
+        except:
+            stream_active = False
+        
+        return (self._is_playing or has_audio or thread_alive or stream_active)
     
     def get_queue_size(self) -> int:
         """Get number of items in queue."""

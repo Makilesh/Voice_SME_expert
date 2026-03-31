@@ -24,6 +24,7 @@ class AppConfig:
     ollama_model: str = "llama2"
     
     # Cartesia TTS Configuration
+    use_cartesia_tts: bool = True  # Enable/disable Cartesia TTS
     cartesia_api_key: str = ""
     cartesia_voice_id: str = "e07c00bc-4134-4eae-9ea4-1a55fb45746b"  # Brooke voice
     cartesia_model: str = "sonic-3"  # Use sonic-3 for best quality
@@ -173,6 +174,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         ollama_model=os.getenv("OLLAMA_MODEL", "llama2"),
         
         # Cartesia TTS
+        use_cartesia_tts=os.getenv("USE_CARTESIA_TTS", "true").lower() == "true",
         cartesia_api_key=os.getenv("CARTESIA_API_KEY", ""),
         cartesia_voice_id=os.getenv("CARTESIA_VOICE_ID", "e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
         cartesia_model=os.getenv("CARTESIA_MODEL", "sonic-3"),

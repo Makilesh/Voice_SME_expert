@@ -5,35 +5,28 @@ python-dotenv>=1.0.0
 httpx>=0.24.0
 
 # Audio Processing
-# Note: pyaudio removed - sounddevice is a better cross-platform alternative
 sounddevice>=0.4.6
 soundfile>=0.12.1
 librosa>=0.10.0
-# webrtcvad requires compilation - using silero-vad instead
 
 # Speech Recognition and Transcription
 faster-whisper>=1.0.0,<1.3.0
-# RealtimeSTT removed - causes dependency conflicts, using faster-whisper directly
-silero-vad>=4.0.0
 
 # Speaker Diarization
-pyannote.audio>=3.1.0
-# speechbrain removed - ruamel.yaml.clibz requires C++ compiler
-# resemblyzer removed - webrtcvad requires C++ compiler
-# Using pyannote.audio which provides speaker embedding capabilities
+# speechbrain is used by SpeakerEmbeddingExtractor for ECAPA-TDNN embeddings.
+# It requires torch. If unavailable, the code falls back to librosa MFCC features.
+speechbrain>=1.0.0
+torch>=2.1.0
+torchaudio>=2.1.0
 
 # Wake Word Detection
 openwakeword>=0.5.1
-pvporcupine>=2.2.0
 
 # LLM and RAG
 openai>=1.6.0
 google-generativeai>=0.3.0
-langchain>=0.1.0
-langchain-community>=0.0.10
 chromadb>=0.4.18
 sentence-transformers>=2.2.2
-faiss-cpu>=1.7.4
 
 # TTS
 cartesia>=0.1.0
@@ -55,7 +48,3 @@ pyyaml>=6.0.1
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pytest-cov>=4.1.0
-
-# Optional GPU Support
-# torch>=2.1.0  # Uncomment for GPU support
-# torchaudio>=2.1.0  # Uncomment for GPU support

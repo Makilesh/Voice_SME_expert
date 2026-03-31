@@ -91,7 +91,7 @@ class StreamingTranscriber:
         
         if buffer_duration >= self.min_audio_length:
             # Transcribe current buffer
-            audio = np.array(self._audio_buffer)
+            audio = np.array(self._audio_buffer, dtype=np.float32)
             
             try:
                 if self._model is not None:
@@ -131,7 +131,7 @@ class StreamingTranscriber:
         self._load_model()
         
         # Transcribe remaining audio
-        audio = np.array(self._audio_buffer)
+        audio = np.array(self._audio_buffer, dtype=np.float32)
         
         try:
             if self._model is not None and len(audio) > self.sample_rate * 0.3:
